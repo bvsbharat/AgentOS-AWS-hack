@@ -48,6 +48,73 @@ function App() {
     return () => clearInterval(interval);
   }, [agents, updateAgent]);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const { agents, rooms, updateAgent, addMessage, office } = useAgentStore.getState();
+      if (office.allHandsMode) return;
+      const availableAgents = agents.filter((agent) => agent.status === 'available');
+
+      availableAgents.forEach((agent) => {
+        if (agent.targetPosition) return;
+        const room = rooms.find((r) => r.id === agent.room);
+        const target = room
+          ? {
+              x: room.position.x + (Math.random() - 0.5) * room.size.width * 0.8,
+              z: room.position.z + (Math.random() - 0.5) * room.size.depth * 0.8,
+            }
+          : {
+              x: (Math.random() - 0.5) * 40,
+              z: (Math.random() - 0.5) * 40,
+            };
+        updateAgent(agent.id, { targetPosition: target });
+      });
+
+      if (availableAgents.length < 2) return;
+      if (Math.random() > 0.35) return;
+      const first = availableAgents[Math.floor(Math.random() * availableAgents.length)];
+      let second = availableAgents[Math.floor(Math.random() * availableAgents.length)];
+      if (second.id === first.id) {
+        second = availableAgents.find((a) => a.id !== first.id) || second;
+      }
+      const lines = [
+        'Quick sync on the hallway whiteboard?',
+        'Got a fresh idea for the layout.',
+        'Let’s regroup near the break room.',
+        'Sharing a draft in a minute.',
+        'Any blockers on your side?',
+      ];
+      const line = lines[Math.floor(Math.random() * lines.length)];
+      addMessage(first.id, { sender: 'agent', content: `💬 ${line} (${second.name})` });
+      addMessage(second.id, { sender: 'agent', content: `💬 ${line} (${first.name})` });
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!office.allHandsMode) return;
+    const { agents, rooms, tasks, updateAgent } = useAgentStore.getState();
+    const meetingRoom = rooms.find((room) => room.id === 'meeting-room');
+    if (!meetingRoom) return;
+    const center = meetingRoom.position;
+    const radius = Math.min(meetingRoom.size.width, meetingRoom.size.depth) * 0.3;
+    agents.forEach((agent, index) => {
+      const hasActiveTask = tasks.some(
+        (task) =>
+          task.assignedTo === agent.id &&
+          (task.status === 'in_progress' || task.status === 'review')
+      );
+      if (agent.status === 'busy' || agent.status === 'deep_focus' || hasActiveTask) return;
+      const angle = (index / Math.max(agents.length, 1)) * Math.PI * 2;
+      updateAgent(agent.id, {
+        targetPosition: {
+          x: center.x + Math.cos(angle) * radius,
+          z: center.z + Math.sin(angle) * radius,
+        },
+      });
+    });
+  }, [office.allHandsMode]);
+
   // Auto-assign and execute pending tasks
   useEffect(() => {
     const interval = setInterval(async () => {
@@ -127,7 +194,7 @@ function App() {
       <div className="relative z-10 pointer-events-none">
         {/* Top Bar */}
         <div className="pointer-events-auto">
-          <TopBar />
+          <TopBar timeText={formatTime(currentTime)} dateText={formatDate(currentTime)} />
         </div>
 
         {/* Sidebar (when agent selected) */}
@@ -147,18 +214,6 @@ function App() {
             onClose={() => setShowConnectionManager(false)} 
           />
           <ActivityLog />
-        </div>
-      </div>
-
-      {/* Time Display - Current Real Time */}
-      <div className="fixed bottom-4 left-4 z-20">
-        <div className="bg-slate-900/80 backdrop-blur-xl rounded-xl px-4 py-2 border border-white/10">
-          <p className="text-lg font-mono text-cyan-400">
-            {formatTime(currentTime)}
-          </p>
-          <p className="text-xs text-slate-500">
-            {formatDate(currentTime)}
-          </p>
         </div>
       </div>
 

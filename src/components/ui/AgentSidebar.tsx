@@ -1,23 +1,33 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  X, 
-  Send, 
-  Mic, 
+import {
+  X,
+  Send,
+  Mic,
   FileText,
   Play,
   Download,
   Radio,
   CheckCircle2,
   Clock,
-  AlertCircle
+  AlertCircle,
+  Loader2,
+  ChevronRight,
+  XCircle,
+  Volume2,
+  VolumeX,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { useAgentStore } from '@/store/agentStore';
+import { bedrockAgent } from '@/services/bedrockAgent';
+import { speak, stop as stopTTS, getVoiceForRole } from '@/services/ttsService';
+import { startRecording, stopRecording, isRecording as isSttRecording } from '@/services/sttService';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import type { AgentColor } from '@/types';
+import type { AgentColor, Message } from '@/types';
 
 const colorMap: Record<AgentColor, string> = {
   blue: '#3b82f6',
@@ -74,6 +84,116 @@ function TaskCard({ task }: { task: { id: string; title: string; description: st
   );
 }
 
+function parseReasoning(content: string): { reasoning: string | null; response: string } {
+  const match = content.match(/💭\s*Reasoning:\s*([\s\S]*?)(?:\n\n)([\s\S]*)/);
+  if (match) {
+    return { reasoning: match[1].trim(), response: match[2].trim() };
+  }
+  return { reasoning: null, response: content };
+}
+
+function MarkdownRenderer({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      components={{
+        h1: ({ children }) => <h1 className="text-base font-bold mt-3 mb-1.5 text-white">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-sm font-bold mt-2.5 mb-1 text-white">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-sm font-semibold mt-2 mb-1 text-white">{children}</h3>,
+        p: ({ children }) => <p className="mb-1.5 last:mb-0 leading-relaxed">{children}</p>,
+        strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+        em: ({ children }) => <em className="italic text-slate-300">{children}</em>,
+        ul: ({ children }) => <ul className="list-disc list-inside mb-1.5 space-y-0.5">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal list-inside mb-1.5 space-y-0.5">{children}</ol>,
+        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+        code: ({ className, children }) => {
+          const isBlock = className?.includes('language-');
+          if (isBlock) {
+            return (
+              <code className="block bg-black/30 rounded-md px-2.5 py-2 my-1.5 text-xs font-mono text-cyan-300 overflow-x-auto whitespace-pre">
+                {children}
+              </code>
+            );
+          }
+          return (
+            <code className="bg-white/10 rounded px-1 py-0.5 text-xs font-mono text-cyan-300">
+              {children}
+            </code>
+          );
+        },
+        pre: ({ children }) => <pre className="my-1.5">{children}</pre>,
+        blockquote: ({ children }) => (
+          <blockquote className="border-l-2 border-cyan-500/50 pl-2.5 my-1.5 text-slate-300 italic">
+            {children}
+          </blockquote>
+        ),
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2">
+            {children}
+          </a>
+        ),
+        hr: () => <hr className="border-white/10 my-2" />,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
+function ChatMessageContent({ content }: { content: string }) {
+  const { reasoning, response } = parseReasoning(content);
+  if (!reasoning) return <MarkdownRenderer content={content} />;
+  return (
+    <>
+      <details className="mb-1.5">
+        <summary className="cursor-pointer text-xs text-slate-400 hover:text-slate-300 flex items-center gap-1 select-none">
+          <ChevronRight className="w-3 h-3 transition-transform details-open:rotate-90" />
+          Reasoning
+        </summary>
+        <p className="text-xs text-slate-400 mt-1 pl-4 border-l border-white/10">{reasoning}</p>
+      </details>
+      <MarkdownRenderer content={response} />
+    </>
+  );
+}
+
+function ToolStepBubble({ message }: { message: Message }) {
+  const step = message.toolStep;
+  if (!step) return null;
+
+  const isSuccess = step.status === 'success';
+  const [isOpen, setIsOpen] = useState(false);
+  return (
+    <div className="flex flex-col gap-1 max-w-[90%]">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs border text-left ${
+          isSuccess
+            ? 'border-green-500/30 bg-green-500/10 text-green-300'
+            : 'border-red-500/30 bg-red-500/10 text-red-300'
+        }`}
+      >
+        {isSuccess ? (
+          <CheckCircle2 className="w-3 h-3 flex-shrink-0" />
+        ) : (
+          <XCircle className="w-3 h-3 flex-shrink-0" />
+        )}
+        <span className="truncate">{step.action}</span>
+      </button>
+      {isOpen && (
+        <div className="px-3 py-2 rounded-md text-[10px] bg-white/5 border border-white/10 text-slate-300 space-y-1">
+          <div className="flex items-center gap-2 text-[10px] text-slate-400">
+            <span className="uppercase tracking-wide">{step.toolName}</span>
+            <span>•</span>
+            <span>{new Date(step.timestamp).toLocaleTimeString()}</span>
+          </div>
+          <div className="whitespace-pre-wrap">{step.action}</div>
+          {step.summary && <div className="whitespace-pre-wrap text-slate-400">{step.summary}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AgentSidebar() {
   const agents = useAgentStore((state) => state.agents);
   const tasks = useAgentStore((state) => state.tasks);
@@ -85,6 +205,11 @@ export function AgentSidebar() {
 
   const [inputMessage, setInputMessage] = useState('');
   const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(false);
+  const [isTtsSpeaking, setIsTtsSpeaking] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const selectedAgent = agents.find((a) => a.id === office.selectedAgent);
@@ -95,6 +220,12 @@ export function AgentSidebar() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [selectedAgent?.conversations]);
 
+  // Stop TTS when agent changes or TTS is toggled off
+  useEffect(() => {
+    stopTTS();
+    setIsTtsSpeaking(false);
+  }, [selectedAgent?.id, ttsEnabled]);
+
   // Play greeting when agent is selected
   useEffect(() => {
     if (selectedAgent && selectedAgent.conversations.length === 0) {
@@ -104,26 +235,111 @@ export function AgentSidebar() {
     }
   }, [selectedAgent?.id]);
 
-  const handleSendMessage = () => {
-    if (!inputMessage.trim() || !selectedAgent) return;
+  const handleSendMessage = async () => {
+    if (!inputMessage.trim() || !selectedAgent || isLoading) return;
 
-    addMessage(selectedAgent.id, { sender: 'user', content: inputMessage });
-    
-    // Simulate agent response
-    setTimeout(() => {
-      const responses: Record<string, string[]> = {
-        chill: ["Got it, I'll handle that.", "No worries, on it.", "Sure thing."],
-        focused: ["Processing...", "I'll get right on that.", "Understood."],
-        chatty: ["Oh that's interesting! Let me work on that!", "I'd love to help with that!", "Ooh fun task!"],
-        sarcastic: ["Fine, I'll do it.", "As if I had a choice...", "*eye roll* Okay."],
-        enthusiastic: ["OH THIS IS GONNA BE AMAZING!", "LET'S GOOOOO!", "I'm ON IT! WOO!"],
-      };
-      const responses_list = responses[selectedAgent.personality];
-      const response = responses_list[Math.floor(Math.random() * responses_list.length)];
-      addMessage(selectedAgent.id, { sender: 'agent', content: response });
-    }, 1000);
-
+    const userMsg = inputMessage;
+    addMessage(selectedAgent.id, { sender: 'user', content: userMsg });
     setInputMessage('');
+    setIsLoading(true);
+
+    try {
+      // Build conversation history (last 10 messages)
+      const recentMessages = selectedAgent.conversations.slice(-10).map(m => ({
+        role: m.sender === 'user' ? 'user' : 'assistant',
+        content: m.content
+      }));
+      // Append the current message
+      recentMessages.push({ role: 'user', content: userMsg });
+
+      const result = await bedrockAgent.chat(
+        selectedAgent.name,
+        selectedAgent.role,
+        selectedAgent.personality,
+        recentMessages
+      );
+
+      addMessage(selectedAgent.id, { sender: 'agent', content: result.response });
+
+      if (ttsEnabled) {
+        const voice = getVoiceForRole(selectedAgent.role);
+        setIsTtsSpeaking(true);
+        speak(result.response, voice).catch(err => {
+          console.error('[AgentSidebar] TTS error:', err);
+        }).finally(() => {
+          setIsTtsSpeaking(false);
+        });
+      }
+    } catch (error) {
+      console.error('[AgentSidebar] Chat error:', error);
+      addMessage(selectedAgent.id, { sender: 'agent', content: 'Sorry, I had trouble processing that.' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleMicToggle = async () => {
+    if (isRecording) {
+      // Stop recording and transcribe
+      setIsRecording(false);
+      setIsTranscribing(true);
+      try {
+        const text = await stopRecording();
+        if (text && text.trim()) {
+          setInputMessage(text.trim());
+          // Auto-send after a tick so inputMessage is set
+          setTimeout(() => {
+            // We need to send directly since handleSendMessage reads inputMessage from state
+            if (!selectedAgent || isLoading) return;
+            addMessage(selectedAgent.id, { sender: 'user', content: text.trim() });
+            setIsLoading(true);
+
+            const recentMessages = selectedAgent.conversations.slice(-10).map(m => ({
+              role: m.sender === 'user' ? 'user' : 'assistant',
+              content: m.content
+            }));
+            recentMessages.push({ role: 'user', content: text.trim() });
+
+            bedrockAgent.chat(
+              selectedAgent.name,
+              selectedAgent.role,
+              selectedAgent.personality,
+              recentMessages
+            ).then((result) => {
+              addMessage(selectedAgent.id, { sender: 'agent', content: result.response });
+              if (ttsEnabled) {
+                const voice = getVoiceForRole(selectedAgent.role);
+                setIsTtsSpeaking(true);
+                speak(result.response, voice).catch(err => {
+                  console.error('[AgentSidebar] TTS error:', err);
+                }).finally(() => {
+                  setIsTtsSpeaking(false);
+                });
+              }
+            }).catch((error) => {
+              console.error('[AgentSidebar] Chat error:', error);
+              addMessage(selectedAgent.id, { sender: 'agent', content: 'Sorry, I had trouble processing that.' });
+            }).finally(() => {
+              setIsLoading(false);
+            });
+
+            setInputMessage('');
+          }, 0);
+        }
+      } catch (err) {
+        console.error('[AgentSidebar] STT error:', err);
+      } finally {
+        setIsTranscribing(false);
+      }
+    } else {
+      // Start recording
+      try {
+        await startRecording();
+        setIsRecording(true);
+      } catch (err) {
+        console.error('[AgentSidebar] Mic access error:', err);
+      }
+    }
   };
 
   const handleAssignTask = () => {
@@ -133,7 +349,7 @@ export function AgentSidebar() {
       title: inputMessage.slice(0, 50),
       description: inputMessage,
       assignedTo: selectedAgent.id,
-      status: 'in_progress',
+      status: 'pending',
       priority: 'medium',
     });
 
@@ -165,78 +381,50 @@ export function AgentSidebar() {
   return (
     <AnimatePresence>
       <motion.div
-        initial={{ x: 400, opacity: 0 }}
-        animate={{ x: 0, opacity: 1 }}
-        exit={{ x: 400, opacity: 0 }}
+        initial={{ y: 200, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: 200, opacity: 0 }}
         transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-        className="fixed right-4 top-20 bottom-4 w-96 z-40"
+        className={isExpanded ? "fixed left-0 right-0 top-14 bottom-0 h-[calc(100vh-3.5rem)] z-40" : "fixed left-0 right-0 bottom-0 h-[36vh] max-h-[360px] min-h-[220px] z-40"}
       >
-        <div className="h-full bg-slate-900/80 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl overflow-hidden flex flex-col">
-          {/* Header */}
-          <div className="flex items-center justify-between p-4 border-b border-white/10">
-            <div className="flex items-center gap-3">
-              <div 
-                className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-lg shadow-lg"
-                style={{ 
-                  backgroundColor: colorMap[selectedAgent.color],
-                  boxShadow: `0 0 20px ${colorMap[selectedAgent.color]}50`
-                }}
-              >
-                {selectedAgent.name.charAt(0)}
-              </div>
-              <div>
-                <h3 className="font-semibold text-white">{selectedAgent.name}</h3>
-                <p className="text-xs text-slate-400 capitalize">{selectedAgent.role} • {selectedAgent.personality}</p>
-              </div>
-            </div>
+        <div className="h-full bg-slate-900/80 backdrop-blur-xl border-t border-white/10 shadow-2xl overflow-hidden flex flex-col relative pt-4">
+          <div className="absolute right-2 top-1 z-10 flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setTtsEnabled(!ttsEnabled)}
+              className={`${ttsEnabled ? 'text-cyan-400 bg-cyan-500/20' : 'text-slate-400 hover:text-white hover:bg-white/10'} h-7 w-7`}
+              title={ttsEnabled ? 'Disable TTS' : 'Enable TTS'}
+            >
+              {ttsEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="text-slate-400 hover:text-white hover:bg-white/10 h-7 w-7"
+              title={isExpanded ? 'Collapse' : 'Expand'}
+            >
+              {isExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            </Button>
             <Button
               variant="ghost"
               size="icon"
               onClick={() => selectAgent(null)}
-              className="text-slate-400 hover:text-white hover:bg-white/10"
+              className="text-slate-400 hover:text-white hover:bg-white/10 h-7 w-7"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
             </Button>
-          </div>
-
-          {/* Agent Stats */}
-          <div className="px-4 py-3 border-b border-white/10">
-            <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-              <span>Mood</span>
-              <span>{selectedAgent.mood}%</span>
-            </div>
-            <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden mb-3">
-              <div 
-                className="h-full rounded-full transition-all duration-500"
-                style={{ 
-                  width: `${selectedAgent.mood}%`,
-                  backgroundColor: selectedAgent.mood > 70 ? '#22c55e' : selectedAgent.mood > 40 ? '#eab308' : '#ef4444'
-                }}
-              />
-            </div>
-            <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-              <span>Energy</span>
-              <span>{selectedAgent.energy}%</span>
-            </div>
-            <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-              <div 
-                className="h-full rounded-full transition-all duration-500"
-                style={{ 
-                  width: `${selectedAgent.energy}%`,
-                  backgroundColor: selectedAgent.energy > 70 ? '#22c55e' : selectedAgent.energy > 40 ? '#eab308' : '#ef4444'
-                }}
-              />
-            </div>
           </div>
 
           {/* Tasks Section */}
           {agentTasks.length > 0 && (
-            <div className="px-4 py-3 border-b border-white/10">
+            <div className="px-2 py-2 border-b border-white/10">
               <h4 className="text-sm font-medium text-white mb-3 flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-cyan-400" />
                 Active Tasks
               </h4>
-              <div className="space-y-2 max-h-32 overflow-y-auto">
+              <div className="space-y-2 max-h-24 overflow-y-auto">
                 {agentTasks.map((task) => (
                   <TaskCard key={task.id} task={task} />
                 ))}
@@ -245,7 +433,7 @@ export function AgentSidebar() {
           )}
 
           {/* Chat Messages */}
-          <ScrollArea className="flex-1 px-4 py-3">
+          <div className="flex-1 overflow-y-auto px-0.5 py-1">
             <div className="space-y-3">
               {selectedAgent.conversations.map((msg, idx) => (
                 <motion.div
@@ -255,24 +443,75 @@ export function AgentSidebar() {
                   transition={{ delay: idx * 0.05 }}
                   className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
-                  <div 
-                    className={`max-w-[80%] px-3 py-2 rounded-xl text-sm ${
-                      msg.sender === 'user' 
-                        ? 'bg-cyan-500/20 text-cyan-100 border border-cyan-500/30' 
-                        : 'bg-white/10 text-slate-200 border border-white/10'
-                    }`}
-                  >
-                    {msg.content}
-                  </div>
+                  {msg.type === 'tool_step' ? (
+                    <ToolStepBubble message={msg} />
+                  ) : (
+                    <div className={`max-w-[90%] flex items-center gap-2 ${msg.sender === 'user' ? 'flex-row-reverse' : ''}`}>
+                      <div
+                        className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0 mt-1"
+                        style={{ backgroundColor: msg.sender === 'user' ? '#0ea5e9' : colorMap[selectedAgent.color] }}
+                      >
+                        {msg.sender === 'user' ? 'U' : selectedAgent.name.charAt(0)}
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                        {msg.sender === 'user' ? 'You' : selectedAgent.name}
+                      </span>
+                      <div
+                        className={`px-2.5 py-2 rounded-md text-xs font-mono tracking-tight ${
+                          msg.sender === 'user'
+                            ? 'bg-cyan-500/10 text-cyan-100 border border-cyan-500/30'
+                            : 'bg-black/40 text-slate-200 border border-white/10'
+                        }`}
+                      >
+                        {msg.sender === 'agent' ? <ChatMessageContent content={msg.content} /> : msg.content}
+                      </div>
+                    </div>
+                  )}
                 </motion.div>
               ))}
+              {isLoading && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex justify-start"
+                >
+                  <div className="max-w-[90%] px-2.5 py-2 rounded-md text-xs font-mono bg-black/40 text-slate-400 border border-white/10 flex items-center gap-2">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Thinking...
+                  </div>
+                </motion.div>
+              )}
+              {isTranscribing && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex justify-start"
+                >
+                  <div className="px-3 py-1.5 rounded-md text-xs bg-purple-500/10 text-purple-300 border border-purple-500/30 flex items-center gap-2 font-mono">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Transcribing...
+                  </div>
+                </motion.div>
+              )}
+              {isTtsSpeaking && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex justify-start"
+                >
+                  <div className="px-3 py-1.5 rounded-md text-xs bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 flex items-center gap-2 font-mono">
+                    <Volume2 className="w-3 h-3" />
+                    Speaking...
+                  </div>
+                </motion.div>
+              )}
               <div ref={messagesEndRef} />
             </div>
-          </ScrollArea>
+          </div>
 
           {/* Voice Waveform (when recording) */}
           {isRecording && (
-            <div className="px-4 py-2">
+            <div className="px-2 py-1.5">
               <div className="flex items-center justify-center gap-1 h-8">
                 {[...Array(20)].map((_, i) => (
                   <motion.div
@@ -293,75 +532,71 @@ export function AgentSidebar() {
           )}
 
           {/* Input Area */}
-          <div className="p-4 border-t border-white/10">
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setIsRecording(!isRecording)}
-                className={`${isRecording ? 'text-red-400 bg-red-500/20' : 'text-slate-400 hover:text-white hover:bg-white/10'}`}
-              >
-                <Mic className="w-4 h-4" />
-              </Button>
+          <div className="px-2 py-2 border-t border-white/10">
+            <div className="relative">
               <Input
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                onKeyDown={(e) => e.key === 'Enter' && !isLoading && handleSendMessage()}
                 placeholder="Type your message..."
-                className="flex-1 bg-white/5 border-white/10 text-white placeholder:text-slate-500"
+                disabled={isLoading}
+                className="w-full h-11 pl-9 pr-11 bg-black/40 border-white/10 text-white placeholder:text-slate-500 font-mono text-sm rounded-md"
               />
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={handleSendMessage}
-                disabled={!inputMessage.trim()}
-                className="text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50"
+                onClick={handleMicToggle}
+                disabled={isTranscribing || isLoading}
+                className={`${isRecording ? 'text-red-400 bg-red-500/20' : 'text-slate-400 hover:text-white hover:bg-white/10'} absolute left-1.5 top-1/2 -translate-y-1/2 h-7 w-7`}
               >
-                <Send className="w-4 h-4" />
+                <Mic className="w-3.5 h-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleSendMessage}
+                disabled={!inputMessage.trim() || isLoading}
+                className="text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-50 absolute right-1.5 top-1/2 -translate-y-1/2 h-7 w-7"
+              >
+                {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
               </Button>
             </div>
-
-            {/* Quick Actions */}
-            <div className="flex items-center gap-2 mt-3">
+            <div className="flex items-center justify-end gap-1 mt-1">
               <Button
-                variant="outline"
-                size="sm"
+                variant="ghost"
+                size="icon"
                 onClick={handleAssignTask}
                 disabled={!inputMessage.trim()}
-                className="flex-1 bg-white/5 border-white/10 text-slate-300 hover:bg-white/10 hover:text-white text-xs"
+                className="h-7 w-7 text-slate-400 hover:text-white hover:bg-white/10 disabled:opacity-50"
+                title="Assign Task"
               >
-                <CheckCircle2 className="w-3 h-3 mr-1" />
-                Assign Task
+                <CheckCircle2 className="w-3.5 h-3.5" />
               </Button>
               <Button
-                variant="outline"
-                size="sm"
+                variant="ghost"
+                size="icon"
                 onClick={handleExport}
-                className="flex-1 bg-white/5 border-white/10 text-slate-300 hover:bg-white/10 hover:text-white text-xs"
+                className="h-7 w-7 text-slate-400 hover:text-white hover:bg-white/10"
+                title="Export"
               >
-                <Download className="w-3 h-3 mr-1" />
-                Export
-              </Button>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="grid grid-cols-2 gap-2 mt-3">
-              <Button
-                variant="outline"
-                size="sm"
-                className="bg-white/5 border-white/10 text-slate-300 hover:bg-white/10 hover:text-white text-xs"
-              >
-                <Play className="w-3 h-3 mr-1" />
-                Replay Mode
+                <Download className="w-3.5 h-3.5" />
               </Button>
               <Button
-                variant="outline"
-                size="sm"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-slate-400 hover:text-white hover:bg-white/10"
+                title="Replay Mode"
+              >
+                <Play className="w-3.5 h-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={() => broadcastToAll("All hands meeting!")}
-                className="bg-white/5 border-white/10 text-slate-300 hover:bg-white/10 hover:text-white text-xs"
+                className="h-7 w-7 text-slate-400 hover:text-white hover:bg-white/10"
+                title="Broadcast"
               >
-                <Radio className="w-3 h-3 mr-1" />
-                Broadcast
+                <Radio className="w-3.5 h-3.5" />
               </Button>
             </div>
           </div>

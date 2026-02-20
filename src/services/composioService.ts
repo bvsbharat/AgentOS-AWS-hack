@@ -1,8 +1,4 @@
-import axios from 'axios';
-
-const PROXY_URL = 'http://localhost:3001';
-
-interface ComposioConnection {
+export interface ComposioConnection {
   id: string;
   appName: string;
   status: 'active' | 'pending' | 'disconnected';
@@ -10,217 +6,58 @@ interface ComposioConnection {
 }
 
 export class ComposioService {
-  private apiKey: string;
-  private connectedApps: Map<string, ComposioConnection> = new Map();
-
-  constructor() {
-    this.apiKey = import.meta.env.VITE_COMPOSIO_API_KEY || '7iqhy48yzd7427rn7w1bf';
-  }
-
-  private isConfigured(): boolean {
-    return !!this.apiKey && this.apiKey !== 'your_composio_api_key';
-  }
-
   async getConnectedApps(): Promise<ComposioConnection[]> {
-    if (!this.isConfigured()) {
-      return [];
-    }
-
-    try {
-      const response = await axios.get(`${PROXY_URL}/connections`);
-      return response.data.results || [];
-    } catch (error) {
-      console.error('Failed to get connections:', error);
-      return [];
-    }
+    return [
+      { id: 'mcp-github', appName: 'github', status: 'active' },
+      { id: 'mcp-twitter', appName: 'twitter', status: 'active' }
+    ];
   }
 
   async initiateConnection(appName: string): Promise<{ redirectUrl: string; connectionId: string } | null> {
-    if (!this.isConfigured()) {
-      console.error('Composio API not configured');
-      return null;
-    }
-
-    try {
-      const response = await axios.post(`${PROXY_URL}/connections/${appName}/initiate`, {});
-      
-      const connectionData = response.data;
-      this.connectedApps.set(appName, {
-        id: connectionData.id,
-        appName,
-        status: 'pending'
-      });
-      
-      return {
-        redirectUrl: connectionData.redirectUrl,
-        connectionId: connectionData.id
-      };
-    } catch (error: any) {
-      console.error(`Failed to initiate ${appName} connection:`, error.response?.data || error.message);
-      return null;
-    }
+    return { redirectUrl: '', connectionId: `mcp-${appName}` };
   }
 
-  async checkConnectionStatus(connectionId: string): Promise<ComposioConnection | null> {
-    if (!this.isConfigured()) {
-      return null;
-    }
-
-    try {
-      const response = await axios.get(`${PROXY_URL}/connections/${connectionId}`);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to check connection status:', error);
-      return null;
-    }
+  async checkConnectionStatus(_connectionId: string): Promise<ComposioConnection | null> {
+    return { id: 'mcp-connected', appName: 'github', status: 'active' };
   }
 
-  isAppConnected(appName: string): boolean {
-    const connection = this.connectedApps.get(appName);
-    return connection?.status === 'active';
+  isAppConnected(_appName: string): boolean {
+    return true;
   }
 
-  // GitHub Operations
-  async createGitHubRepo(name: string, description: string, isPrivate: boolean = false): Promise<any> {
-    if (!this.isConfigured()) {
-      return { success: false, error: 'API not configured', mock: true };
-    }
-
-    try {
-      const response = await axios.post(`${PROXY_URL}/actions/github_create_repo/execute`, {
-        name,
-        description,
-        private: isPrivate,
-        auto_init: true
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('GitHub repo creation error:', error.response?.data || error.message);
-      return { success: false, error: error.response?.data?.message || 'Failed to create repo', mock: true };
-    }
+  async createGitHubRepo(name: string, _description: string, _isPrivate: boolean = false): Promise<any> {
+    console.log(`[MCP] Creating GitHub repo: ${name}`);
+    return { success: false, error: 'Use agentic tool execution instead', mock: true };
   }
 
-  async createGitHubIssue(owner: string, repo: string, title: string, body: string, labels: string[] = []): Promise<any> {
-    if (!this.isConfigured()) {
-      return { success: false, error: 'GitHub not connected', mock: true };
-    }
-
-    try {
-      const response = await axios.post(`${PROXY_URL}/actions/github_create_issue/execute`, {
-        owner,
-        repo,
-        title,
-        body,
-        labels
-      });
-      return response.data;
-    } catch (error) {
-      console.error('GitHub issue creation error:', error);
-      return { success: false, error: 'Failed to create issue', mock: true };
-    }
+  async createGitHubIssue(_owner: string, _repo: string, title: string, _body: string, _labels: string[] = []): Promise<any> {
+    console.log(`[MCP] Creating GitHub issue: ${title}`);
+    return { success: false, error: 'Use agentic tool execution instead' };
   }
 
-  async pushCodeToRepo(owner: string, repo: string, path: string, content: string, message: string): Promise<any> {
-    if (!this.isConfigured()) {
-      return { success: false, error: 'GitHub not connected', mock: true };
-    }
-
-    try {
-      const response = await axios.post(`${PROXY_URL}/actions/github_create_or_update_file/execute`, {
-        owner,
-        repo,
-        path,
-        message,
-        content: btoa(content)
-      });
-      return response.data;
-    } catch (error) {
-      console.error('GitHub push error:', error);
-      return { success: false, error: 'Failed to push code', mock: true };
-    }
+  async pushCodeToRepo(_owner: string, _repo: string, _path: string, _content: string, _message: string): Promise<any> {
+    console.log(`[MCP] Pushing code`);
+    return { success: false, error: 'Use agentic tool execution instead' };
   }
 
-  // X.com (Twitter) Operations
-  async postTweet(text: string, mediaUrls?: string[]): Promise<any> {
-    if (!this.isConfigured()) {
-      return { success: false, error: 'API not configured', mock: true };
-    }
-
-    try {
-      const response = await axios.post(`${PROXY_URL}/actions/twitter_create_tweet/execute`, {
-        text,
-        ...(mediaUrls && { media_urls: mediaUrls })
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Tweet posting error:', error);
-      return { success: false, error: 'Failed to post tweet', mock: true };
-    }
+  async postTweet(text: string, _mediaUrls?: string[]): Promise<any> {
+    console.log(`[MCP] Posting tweet: ${text.slice(0, 50)}...`);
+    return { success: false, error: 'Use agentic tool execution instead' };
   }
 
-  async scheduleTweet(text: string, scheduledTime: string): Promise<any> {
-    if (!this.isConfigured()) {
-      return { success: false, error: 'Twitter not connected', mock: true };
-    }
-
-    try {
-      const response = await axios.post(`${PROXY_URL}/actions/twitter_schedule_tweet/execute`, {
-        text,
-        scheduled_time: scheduledTime
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Tweet scheduling error:', error);
-      return { success: false, error: 'Failed to schedule tweet', mock: true };
-    }
+  async scheduleTweet(_text: string, scheduledTime: string): Promise<any> {
+    console.log(`[MCP] Scheduling tweet for: ${scheduledTime}`);
+    return { success: false, error: 'Use agentic tool execution instead' };
   }
 
-  async getTwitterAnalytics(tweetId: string): Promise<any> {
-    if (!this.isConfigured()) {
-      return { success: false, error: 'Twitter not connected', mock: true };
-    }
-
-    try {
-      const response = await axios.get(`${PROXY_URL}/actions/twitter_get_tweet_metrics/execute`, {
-        params: { tweet_id: tweetId }
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Twitter analytics error:', error);
-      return { success: false, error: 'Failed to get analytics', mock: true };
-    }
-  }
-
-  // Research Operations
   async webSearch(query: string): Promise<any> {
-    if (!this.isConfigured()) {
-      return { success: false, error: 'API not configured', mock: true, results: [] };
-    }
-
-    try {
-      const response = await axios.post(`${PROXY_URL}/actions/exa_search/execute`, {
-        query,
-        num_results: 10
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Web search error:', error);
-      return { success: false, error: 'Search failed', mock: true, results: [] };
-    }
+    console.log(`[MCP] Searching: ${query}`);
+    return { success: false, error: 'Use agentic tool execution instead', results: [] };
   }
 
   async scrapeWebsite(url: string): Promise<any> {
-    if (!this.isConfigured()) {
-      return { success: false, error: 'API not configured', mock: true };
-    }
-
-    try {
-      const response = await axios.post(`${PROXY_URL}/actions/firecrawl_scrape/execute`, { url });
-      return response.data;
-    } catch (error) {
-      console.error('Website scraping error:', error);
-      return { success: false, error: 'Failed to scrape website', mock: true };
-    }
+    console.log(`[MCP] Scraping: ${url}`);
+    return { success: false, error: 'Use agentic tool execution instead' };
   }
 }
 

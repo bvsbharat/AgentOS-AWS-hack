@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Github, Twitter, Link2, CheckCircle, RefreshCw } from 'lucide-react';
+import { X, Github, Twitter, CheckCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { composioService } from '@/services/composioService';
 
@@ -20,9 +20,12 @@ export function ConnectionManager({ isOpen, onClose }: ConnectionManagerProps) {
     twitter: 'disconnected'
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    checkConnections();
+    if (isOpen) {
+      checkConnections();
+    }
   }, [isOpen]);
 
   const checkConnections = async () => {
@@ -40,20 +43,20 @@ export function ConnectionManager({ isOpen, onClose }: ConnectionManagerProps) {
       });
       
       setConnections(newConnections);
-    } catch (error) {
-      console.error('Failed to check connections:', error);
+    } catch (err) {
+      console.error('Failed to check connections:', err);
     }
   };
 
   const connectApp = async (app: 'github' | 'twitter') => {
     setIsLoading(true);
+    setError(null);
     setConnections(prev => ({ ...prev, [app]: 'connecting' }));
 
     try {
       const result = await composioService.initiateConnection(app);
       
       if (result?.redirectUrl) {
-        // Open OAuth in new window
         const width = 600;
         const height = 700;
         const left = window.screenX + (window.outerWidth - width) / 2;
@@ -65,7 +68,6 @@ export function ConnectionManager({ isOpen, onClose }: ConnectionManagerProps) {
           `width=${width},height=${height},left=${left},top=${top}`
         );
 
-        // Poll for connection status
         const checkInterval = setInterval(async () => {
           const status = await composioService.checkConnectionStatus(result.connectionId);
           if (status?.status === 'active') {
@@ -75,7 +77,6 @@ export function ConnectionManager({ isOpen, onClose }: ConnectionManagerProps) {
           }
         }, 3000);
 
-        // Timeout after 2 minutes
         setTimeout(() => {
           clearInterval(checkInterval);
           if (connections[app] === 'connecting') {
@@ -85,10 +86,12 @@ export function ConnectionManager({ isOpen, onClose }: ConnectionManagerProps) {
         }, 120000);
       } else {
         setConnections(prev => ({ ...prev, [app]: 'disconnected' }));
+        setError('Failed to initiate connection. API may be unavailable.');
         setIsLoading(false);
       }
-    } catch (error) {
-      console.error(`Failed to connect ${app}:`, error);
+    } catch (err: any) {
+      console.error(`Failed to connect ${app}:`, err);
+      setError(err.message || 'Connection failed');
       setConnections(prev => ({ ...prev, [app]: 'disconnected' }));
       setIsLoading(false);
     }
@@ -116,7 +119,7 @@ export function ConnectionManager({ isOpen, onClose }: ConnectionManagerProps) {
           <div className="flex items-center justify-between p-6 border-b border-white/10">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center">
-                <Link2 className="w-5 h-5 text-white" />
+                <CheckCircle className="w-5 h-5 text-white" />
               </div>
               <div>
                 <h2 className="text-lg font-bold text-white">Connect Integrations</h2>
@@ -170,6 +173,13 @@ export function ConnectionManager({ isOpen, onClose }: ConnectionManagerProps) {
                 />
               </div>
             </div>
+
+            {/* Error Message */}
+            {error && (
+              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30">
+                <p className="text-xs text-red-400">{error}</p>
+              </div>
+            )}
 
             {/* Info */}
             <div className="p-3 rounded-lg bg-cyan-500/10 border border-cyan-500/30">

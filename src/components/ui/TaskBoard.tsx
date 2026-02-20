@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Plus, Filter, Search, CheckCircle2, Clock, AlertCircle, FileText, Play, Loader2 } from 'lucide-react';
+import { X, Plus, Filter, Search, CheckCircle2, Clock, AlertCircle, FileText, Play, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAgentStore } from '@/store/agentStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,34 +22,77 @@ const priorityColors = {
   high: 'bg-red-500',
 };
 
-function TaskCard({ task, agents }: { task: Task; agents: { id: string; name: string; color: string }[] }) {
+const agentColorMap: Record<string, string> = {
+  blue: '#3b82f6',
+  green: '#22c55e',
+  purple: '#a855f7',
+  orange: '#f97316',
+  red: '#ef4444',
+  yellow: '#eab308',
+  cyan: '#06b6d4',
+  pink: '#ec4899',
+};
+
+function TaskCard({
+  task,
+  agents,
+  isExpanded,
+  onExpand,
+}: {
+  task: Task;
+  agents: { id: string; name: string; color: string; role: string }[];
+  isExpanded: boolean;
+  onExpand: (taskId: string) => void;
+}) {
   const updateTask = useAgentStore((state) => state.updateTask);
-  const completeTask = useAgentStore((state) => state.completeTask);
   const deleteTask = useAgentStore((state) => state.deleteTask);
   const executeTask = useAgentStore((state) => state.executeTask);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [showAgentPicker, setShowAgentPicker] = useState(false);
 
   const assignedAgent = agents.find((a) => a.id === task.assignedTo);
 
-  const handleStatusChange = () => {
-    const statuses: TaskStatus[] = ['pending', 'in_progress', 'review', 'completed'];
-    const currentIndex = statuses.indexOf(task.status);
-    const nextStatus = statuses[(currentIndex + 1) % statuses.length];
-    
-    if (nextStatus === 'completed') {
-      completeTask(task.id);
-    } else {
-      updateTask(task.id, { status: nextStatus });
+  const handleCardClick = async () => {
+    // Completed tasks: toggle result view
+    if (task.status === 'completed') {
+      onExpand(task.id);
+      return;
+    }
+    // In-progress or review: just cycle forward
+    if (task.status === 'in_progress' || task.status === 'review') {
+      const statuses: TaskStatus[] = ['pending', 'in_progress', 'review', 'completed'];
+      const currentIndex = statuses.indexOf(task.status);
+      const nextStatus = statuses[currentIndex + 1];
+      updateTask(task.id, { status: nextStatus, ...(nextStatus === 'completed' ? { progress: 100, completedAt: Date.now() } : {}) });
+      return;
+    }
+    // Pending with agent assigned: start execution
+    if (task.status === 'pending' && task.assignedTo && !isExecuting) {
+      setIsExecuting(true);
+      await executeTask(task.id);
+      setIsExecuting(false);
+      return;
+    }
+    // Pending without agent: just advance to in_progress
+    if (task.status === 'pending') {
+      updateTask(task.id, { status: 'in_progress' });
     }
   };
 
   const handleExecute = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!task.assignedTo || isExecuting) return;
-    
+
     setIsExecuting(true);
     await executeTask(task.id);
     setIsExecuting(false);
+  };
+
+  const handleAgentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    e.stopPropagation();
+    const agentId = e.target.value || null;
+    updateTask(task.id, { assignedTo: agentId });
+    setShowAgentPicker(false);
   };
 
   return (
@@ -58,23 +101,32 @@ function TaskCard({ task, agents }: { task: Task; agents: { id: string; name: st
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.95 }}
-      className="bg-slate-800/50 rounded-lg p-4 border border-white/10 hover:border-white/20 transition-colors cursor-pointer group"
-      onClick={handleStatusChange}
+      className={`bg-slate-800/50 rounded-lg p-4 border transition-colors group ${
+        task.status === 'completed'
+          ? 'border-green-500/20 hover:border-green-500/40 cursor-pointer'
+          : 'border-white/10 hover:border-white/20 cursor-pointer'
+      }`}
+      onClick={handleCardClick}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1">
           <h4 className="font-medium text-white text-sm">{task.title}</h4>
           <p className="text-xs text-slate-400 mt-1 line-clamp-2">{task.description}</p>
         </div>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            deleteTask(task.id);
-          }}
-          className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-opacity"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500">
+            {new Date(task.createdAt).toLocaleDateString()}
+          </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              deleteTask(task.id);
+            }}
+            className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-opacity"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {task.status === 'in_progress' && (
@@ -83,21 +135,70 @@ function TaskCard({ task, agents }: { task: Task; agents: { id: string; name: st
         </div>
       )}
 
+      {/* Agent assignment row */}
       <div className="flex items-center justify-between mt-3">
         <div className="flex items-center gap-2">
-          <Badge 
-            variant="secondary" 
+          <Badge
+            variant="secondary"
             className={`text-xs ${priorityColors[task.priority]} text-white`}
           >
             {task.priority}
           </Badge>
-          {assignedAgent && (
-            <div 
-              className="w-5 h-5 rounded-full flex items-center justify-center text-xs text-white font-medium"
-              style={{ backgroundColor: assignedAgent.color }}
-            >
-              {assignedAgent.name.charAt(0)}
-            </div>
+
+          {/* Agent assignment: clickable to change */}
+          {task.status !== 'completed' ? (
+            showAgentPicker ? (
+              <select
+                value={task.assignedTo || ''}
+                onChange={handleAgentChange}
+                onBlur={() => setShowAgentPicker(false)}
+                onClick={(e) => e.stopPropagation()}
+                autoFocus
+                className="bg-slate-700 border border-white/20 rounded px-1.5 py-0.5 text-xs text-white min-w-[100px]"
+              >
+                <option value="">Unassigned</option>
+                {agents.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name} ({agent.role})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowAgentPicker(true);
+                }}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors"
+                title={assignedAgent ? `Assigned to ${assignedAgent.name} — click to change` : 'Click to assign agent'}
+              >
+                {assignedAgent ? (
+                  <>
+                    <div
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-xs text-white font-medium"
+                      style={{ backgroundColor: agentColorMap[assignedAgent.color] || '#64748b' }}
+                    >
+                      {assignedAgent.name.charAt(0)}
+                    </div>
+                    <span className="text-xs text-slate-300">{assignedAgent.name}</span>
+                  </>
+                ) : (
+                  <span className="text-xs text-slate-500 italic">Assign agent...</span>
+                )}
+              </button>
+            )
+          ) : (
+            assignedAgent && (
+              <div className="flex items-center gap-1">
+                <div
+                  className="w-5 h-5 rounded-full flex items-center justify-center text-xs text-white font-medium"
+                  style={{ backgroundColor: agentColorMap[assignedAgent.color] || '#64748b' }}
+                >
+                  {assignedAgent.name.charAt(0)}
+                </div>
+                <span className="text-xs text-slate-300">{assignedAgent.name}</span>
+              </div>
+            )
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -106,8 +207,8 @@ function TaskCard({ task, agents }: { task: Task; agents: { id: string; name: st
               onClick={handleExecute}
               disabled={isExecuting}
               className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
-                isExecuting 
-                  ? 'bg-cyan-500/30 text-cyan-300 cursor-wait' 
+                isExecuting
+                  ? 'bg-cyan-500/30 text-cyan-300 cursor-wait'
                   : 'bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30'
               }`}
             >
@@ -119,9 +220,12 @@ function TaskCard({ task, agents }: { task: Task; agents: { id: string; name: st
               {isExecuting ? 'Running...' : 'Execute'}
             </button>
           )}
-          <span className="text-xs text-slate-500">
-            {new Date(task.createdAt).toLocaleDateString()}
-          </span>
+          {task.status === 'completed' && (
+            <div className="flex items-center gap-1 text-xs text-green-400">
+              {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              <span>Details</span>
+            </div>
+          )}
         </div>
       </div>
     </motion.div>
@@ -139,6 +243,8 @@ export function TaskBoard() {
   const [showAddTask, setShowAddTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDesc, setNewTaskDesc] = useState('');
+  const [selectedAgentId, setSelectedAgentId] = useState<string>('');
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
 
   const filteredTasks = tasks.filter((task) => {
     const matchesSearch = task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -150,6 +256,7 @@ export function TaskBoard() {
     ...column,
     tasks: filteredTasks.filter((t) => t.status === column.id),
   }));
+  const expandedTask = expandedTaskId ? tasks.find((task) => task.id === expandedTaskId) : null;
 
   const handleAddTask = () => {
     if (!newTaskTitle.trim()) return;
@@ -157,13 +264,14 @@ export function TaskBoard() {
     addTask({
       title: newTaskTitle,
       description: newTaskDesc,
-      assignedTo: null,
+      assignedTo: selectedAgentId || null,
       status: 'pending',
       priority: 'medium',
     });
 
     setNewTaskTitle('');
     setNewTaskDesc('');
+    setSelectedAgentId('');
     setShowAddTask(false);
   };
 
@@ -185,7 +293,6 @@ export function TaskBoard() {
           onClick={(e) => e.stopPropagation()}
           className="w-full max-w-6xl h-[80vh] bg-slate-900/95 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl overflow-hidden flex flex-col"
         >
-          {/* Header */}
           <div className="flex items-center justify-between p-6 border-b border-white/10">
             <div>
               <h2 className="text-xl font-bold text-white">Global Task Board</h2>
@@ -227,8 +334,62 @@ export function TaskBoard() {
               </Button>
             </div>
           </div>
+          <AnimatePresence>
+            {expandedTask && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="border-b border-white/10 overflow-hidden"
+              >
+                <div className="px-6 py-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-white">{expandedTask.title}</span>
+                        {expandedTask.status === 'completed' && (
+                          <span className="text-[10px] text-green-400 uppercase tracking-wide">Completed</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1">{expandedTask.description}</p>
+                    </div>
+                    <button
+                      onClick={() => setExpandedTaskId(null)}
+                      className="text-slate-400 hover:text-white"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="mt-3 max-h-[30vh] overflow-y-auto pr-2">
+                    {expandedTask.result ? (
+                      <div className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed">
+                        {expandedTask.result}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-500 italic">No detailed result available.</p>
+                    )}
+                    {expandedTask.toolSteps && expandedTask.toolSteps.length > 0 && (
+                      <div className="mt-3 space-y-1">
+                        <p className="text-[10px] uppercase tracking-wider text-slate-500">Tool Steps</p>
+                        {expandedTask.toolSteps.map((step) => (
+                          <div key={step.id} className="flex items-center gap-2 text-xs">
+                            <div className={`w-1.5 h-1.5 rounded-full ${step.status === 'success' ? 'bg-green-500' : 'bg-red-500'}`} />
+                            <span className="text-slate-400">{step.action}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {expandedTask.completedAt && (
+                      <p className="text-[10px] text-slate-500 mt-3">
+                        Completed {new Date(expandedTask.completedAt).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-          {/* Add Task Form */}
           <AnimatePresence>
             {showAddTask && (
               <motion.div
@@ -238,19 +399,31 @@ export function TaskBoard() {
                 className="border-b border-white/10 overflow-hidden"
               >
                 <div className="p-4 bg-white/5">
-                  <div className="flex gap-3">
+                  <div className="flex gap-3 flex-wrap">
                     <Input
                       value={newTaskTitle}
                       onChange={(e) => setNewTaskTitle(e.target.value)}
                       placeholder="Task title..."
-                      className="flex-1 bg-white/5 border-white/10 text-white placeholder:text-slate-500"
+                      className="flex-1 min-w-[200px] bg-white/5 border-white/10 text-white placeholder:text-slate-500"
                     />
                     <Input
                       value={newTaskDesc}
                       onChange={(e) => setNewTaskDesc(e.target.value)}
                       placeholder="Description..."
-                      className="flex-1 bg-white/5 border-white/10 text-white placeholder:text-slate-500"
+                      className="flex-1 min-w-[200px] bg-white/5 border-white/10 text-white placeholder:text-slate-500"
                     />
+                    <select
+                      value={selectedAgentId}
+                      onChange={(e) => setSelectedAgentId(e.target.value)}
+                      className="bg-white/10 border border-white/20 rounded-lg px-3 py-2 text-white text-sm min-w-[150px]"
+                    >
+                      <option value="">Assign to...</option>
+                      {agents.map((agent) => (
+                        <option key={agent.id} value={agent.id}>
+                          {agent.name} ({agent.role})
+                        </option>
+                      ))}
+                    </select>
                     <Button
                       onClick={handleAddTask}
                       disabled={!newTaskTitle.trim()}
@@ -295,7 +468,15 @@ export function TaskBoard() {
                     <div className="space-y-3">
                       <AnimatePresence mode="popLayout">
                         {column.tasks.map((task) => (
-                          <TaskCard key={task.id} task={task} agents={agents} />
+                          <TaskCard
+                            key={task.id}
+                            task={task}
+                            agents={agents}
+                            isExpanded={expandedTaskId === task.id}
+                            onExpand={(taskId) => {
+                              setExpandedTaskId((prev) => (prev === taskId ? null : taskId));
+                            }}
+                          />
                         ))}
                       </AnimatePresence>
                     </div>

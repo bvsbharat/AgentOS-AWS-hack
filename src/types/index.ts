@@ -33,11 +33,31 @@ export interface Agent {
   conversations: Message[];
 }
 
+export interface ToolStep {
+  id: string;
+  toolName: string;
+  action: string;
+  status: 'success' | 'error';
+  summary: string;
+  timestamp: number;
+}
+
+export interface ActivityLogEntry {
+  id: string;
+  timestamp: number;
+  agentId: string;
+  agentName: string;
+  taskId?: string;
+  toolStep: ToolStep;
+}
+
 export interface Message {
   id: string;
   sender: 'user' | 'agent';
   content: string;
   timestamp: number;
+  type?: 'chat' | 'tool_step';
+  toolStep?: ToolStep;
 }
 
 export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'completed';
@@ -51,8 +71,10 @@ export interface Task {
   progress: number;
   createdAt: number;
   completedAt?: number;
+  result?: string;
   subtasks?: Task[];
   priority: 'low' | 'medium' | 'high';
+  toolSteps?: ToolStep[];
 }
 
 export interface Room {

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import type { Agent, Task, Room, Message, AgentStatus, OfficeState } from '@/types';
+import type { Agent, Task, Room, Message, AgentStatus, OfficeState, ActivityLogEntry, ToolStep } from '@/types';
 import { taskExecutor, type TaskExecutionResult } from '@/services/taskExecutor';
+import { notifySlackTaskCompletion } from '@/services/slackNotifier';
 
 interface AgentStore {
   // Agents
@@ -14,10 +15,10 @@ interface AgentStore {
   
   // Tasks
   tasks: Task[];
-  addTask: (task: Omit<Task, 'id' | 'createdAt' | 'progress'>) => void;
+  addTask: (task: Omit<Task, 'id' | 'createdAt' | 'progress' | 'result'>) => void;
   updateTask: (id: string, updates: Partial<Task>) => void;
   assignTask: (taskId: string, agentId: string) => void;
-  completeTask: (id: string) => void;
+  completeTask: (id: string, result?: string) => void;
   deleteTask: (id: string) => void;
   executeTask: (taskId: string) => Promise<TaskExecutionResult>;
   generateStartupTasks: (idea: string) => Promise<void>;
@@ -34,6 +35,10 @@ interface AgentStore {
   setShowConnectionManager: (show: boolean) => void;
   toggleAllHandsMode: () => void;
   
+  // Activity Logs
+  activityLogs: ActivityLogEntry[];
+  addActivityLog: (entry: Omit<ActivityLogEntry, 'id'>) => void;
+
   // Actions
   broadcastToAll: (message: string) => void;
   delegateTask: (managerId: string, taskId: string) => void;
@@ -46,29 +51,29 @@ const defaultRooms: Room[] = [
     id: 'dev-room-1',
     name: 'Dev Room',
     type: 'dev',
-    position: { x: -15, z: -10 },
+    position: { x: -15, z: 10 },
     size: { width: 20, depth: 15 },
     color: '#1e3a5f',
     desks: [
-      { id: 'dev-desk-1', position: { x: -20, z: -18 }, rotation: 0, occupiedBy: null },
-      { id: 'dev-desk-2', position: { x: -15, z: -18 }, rotation: 0, occupiedBy: null },
-      { id: 'dev-desk-3', position: { x: -10, z: -18 }, rotation: 0, occupiedBy: null },
-      { id: 'dev-desk-4', position: { x: -5, z: -18 }, rotation: 0, occupiedBy: null },
-      { id: 'dev-desk-5', position: { x: 0, z: -18 }, rotation: 0, occupiedBy: null },
+      { id: 'dev-desk-1', position: { x: -20, z: 2 }, rotation: 0, occupiedBy: null },
+      { id: 'dev-desk-2', position: { x: -15, z: 2 }, rotation: 0, occupiedBy: null },
+      { id: 'dev-desk-3', position: { x: -10, z: 2 }, rotation: 0, occupiedBy: null },
+      { id: 'dev-desk-4', position: { x: -5, z: 2 }, rotation: 0, occupiedBy: null },
+      { id: 'dev-desk-5', position: { x: 0, z: 2 }, rotation: 0, occupiedBy: null },
     ]
   },
   {
     id: 'design-studio',
     name: 'Design Studio',
     type: 'design',
-    position: { x: -15, z: 10 },
+    position: { x: -15, z: -10 },
     size: { width: 15, depth: 12 },
     color: '#4a1e5f',
     desks: [
-      { id: 'design-desk-1', position: { x: -18, z: 4 }, rotation: 0, occupiedBy: null },
-      { id: 'design-desk-2', position: { x: -12, z: 4 }, rotation: 0, occupiedBy: null },
-      { id: 'design-desk-3', position: { x: -18, z: 8 }, rotation: 0, occupiedBy: null },
-      { id: 'design-desk-4', position: { x: -12, z: 8 }, rotation: 0, occupiedBy: null },
+      { id: 'design-desk-1', position: { x: -18, z: -16 }, rotation: 0, occupiedBy: null },
+      { id: 'design-desk-2', position: { x: -12, z: -16 }, rotation: 0, occupiedBy: null },
+      { id: 'design-desk-3', position: { x: -18, z: -12 }, rotation: 0, occupiedBy: null },
+      { id: 'design-desk-4', position: { x: -12, z: -12 }, rotation: 0, occupiedBy: null },
     ]
   },
   {
@@ -90,22 +95,22 @@ const defaultRooms: Room[] = [
     id: 'meeting-room',
     name: 'Meeting Room',
     type: 'meeting',
-    position: { x: 15, z: 0 },
+    position: { x: 15, z: 15 },
     size: { width: 18, depth: 15 },
     color: '#5f4a1e',
     desks: [
-      { id: 'meeting-table', position: { x: 15, z: 0 }, rotation: 0, occupiedBy: null },
+      { id: 'meeting-table', position: { x: 15, z: 15 }, rotation: 0, occupiedBy: null },
     ]
   },
   {
     id: 'break-room',
     name: 'Break Room',
     type: 'break',
-    position: { x: 15, z: 15 },
+    position: { x: 15, z: 0 },
     size: { width: 12, depth: 12 },
     color: '#5f1e3a',
     desks: [
-      { id: 'coffee-area', position: { x: 15, z: 15 }, rotation: 0, occupiedBy: null },
+      { id: 'coffee-area', position: { x: 15, z: 0 }, rotation: 0, occupiedBy: null },
     ]
   },
 ];
@@ -120,8 +125,8 @@ const initialAgents: Agent[] = [
     accessory: 'glasses',
     skills: { python: true, figma: false, webSearch: true, codeReview: true, summarization: false, dataAnalysis: false, writing: false },
     status: 'available',
-    position: { x: -20, z: -14 },
-    deskPosition: { x: -20, z: -18 },
+    position: { x: -20, z: 6 },
+    deskPosition: { x: -20, z: 2 },
     room: 'dev-room-1',
     mood: 85,
     energy: 90,
@@ -135,9 +140,9 @@ const initialAgents: Agent[] = [
     color: 'purple',
     accessory: 'headphones',
     skills: { python: false, figma: true, webSearch: true, codeReview: false, summarization: false, dataAnalysis: false, writing: false },
-    status: 'busy',
-    position: { x: -18, z: 0 },
-    deskPosition: { x: -18, z: 4 },
+    status: 'available',
+    position: { x: -18, z: -12 },
+    deskPosition: { x: -18, z: -16 },
     room: 'design-studio',
     mood: 70,
     energy: 75,
@@ -151,12 +156,12 @@ const initialAgents: Agent[] = [
     color: 'green',
     accessory: 'none',
     skills: { python: true, figma: false, webSearch: true, codeReview: false, summarization: true, dataAnalysis: true, writing: true },
-    status: 'deep_focus',
+    status: 'available',
     position: { x: 0, z: 4 },
     deskPosition: { x: 0, z: 8 },
     room: 'research-lab',
-    mood: 60,
-    energy: 50,
+    mood: 80,
+    energy: 85,
     conversations: [],
   },
   {
@@ -168,8 +173,8 @@ const initialAgents: Agent[] = [
     accessory: 'hat',
     skills: { python: false, figma: false, webSearch: true, codeReview: false, summarization: true, dataAnalysis: false, writing: true },
     status: 'available',
-    position: { x: 15, z: 12 },
-    deskPosition: { x: 15, z: 15 },
+    position: { x: 15, z: -3 },
+    deskPosition: { x: 15, z: 0 },
     room: 'break-room',
     mood: 95,
     energy: 85,
@@ -183,9 +188,9 @@ const initialAgents: Agent[] = [
     color: 'red',
     accessory: 'crown',
     skills: { python: false, figma: false, webSearch: true, codeReview: true, summarization: true, dataAnalysis: true, writing: true },
-    status: 'busy',
-    position: { x: 15, z: -4 },
-    deskPosition: { x: 15, z: 0 },
+    status: 'available',
+    position: { x: 15, z: 11 },
+    deskPosition: { x: 15, z: 15 },
     room: 'meeting-room',
     mood: 75,
     energy: 80,
@@ -193,46 +198,31 @@ const initialAgents: Agent[] = [
   },
 ];
 
-const initialTasks: Task[] = [
-  {
-    id: 'task-1',
-    title: 'Research AI Tools 2025',
-    description: 'Find and summarize the top 10 AI tools for 2025',
-    assignedTo: 'agent-3',
-    status: 'in_progress',
-    progress: 45,
-    createdAt: Date.now(),
-    priority: 'high',
-  },
-  {
-    id: 'task-2',
-    title: 'Design New Dashboard',
-    description: 'Create UI mockups for the analytics dashboard',
-    assignedTo: 'agent-2',
-    status: 'in_progress',
-    progress: 70,
-    createdAt: Date.now(),
-    priority: 'medium',
-  },
-  {
-    id: 'task-3',
-    title: 'Code Review: Auth Module',
-    description: 'Review the authentication module implementation',
-    assignedTo: null,
-    status: 'pending',
-    progress: 0,
-    createdAt: Date.now(),
-    priority: 'high',
-  },
-];
+const initialTasks: Task[] = [];
+
+const getInitialAgents = () => {
+  if (typeof sessionStorage === 'undefined') return initialAgents;
+  
+  try {
+    const savedPositions = JSON.parse(sessionStorage.getItem('AGENT_POSITIONS') || '{}');
+    return initialAgents.map(agent => ({
+      ...agent,
+      position: savedPositions[agent.id] || agent.position
+    }));
+  } catch (e) {
+    console.error('Failed to load agent positions:', e);
+    return initialAgents;
+  }
+};
 
 export const useAgentStore = create<AgentStore>((set, get) => ({
-  agents: initialAgents,
+  agents: getInitialAgents(),
   tasks: initialTasks,
   rooms: defaultRooms,
+  activityLogs: [],
   office: {
-    time: 14,
-    isNight: false,
+    time: 22,
+    isNight: true,
     selectedAgent: null,
     showAgentCreator: false,
     showTaskBoard: false,
@@ -256,9 +246,20 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   updateAgent: (id, updates) => {
-    set((state) => ({
-      agents: state.agents.map((a) => (a.id === id ? { ...a, ...updates } : a)),
-    }));
+    set((state) => {
+      const newAgents = state.agents.map((a) => (a.id === id ? { ...a, ...updates } : a));
+      
+      // Save positions if position was updated
+      if (updates.position && typeof sessionStorage !== 'undefined') {
+        const positions = newAgents.reduce((acc, agent) => {
+          acc[agent.id] = agent.position;
+          return acc;
+        }, {} as Record<string, { x: number; z: number }>);
+        sessionStorage.setItem('AGENT_POSITIONS', JSON.stringify(positions));
+      }
+      
+      return { agents: newAgents };
+    });
   },
 
   setAgentStatus: (id, status) => {
@@ -268,9 +269,20 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   moveAgent: (id, position) => {
-    set((state) => ({
-      agents: state.agents.map((a) => (a.id === id ? { ...a, position } : a)),
-    }));
+    set((state) => {
+      const newAgents = state.agents.map((a) => (a.id === id ? { ...a, position } : a));
+      
+      // Save positions to sessionStorage
+      if (typeof sessionStorage !== 'undefined') {
+        const positions = newAgents.reduce((acc, agent) => {
+          acc[agent.id] = agent.position;
+          return acc;
+        }, {} as Record<string, { x: number; z: number }>);
+        sessionStorage.setItem('AGENT_POSITIONS', JSON.stringify(positions));
+      }
+      
+      return { agents: newAgents };
+    });
   },
 
   addMessage: (agentId, message) => {
@@ -292,7 +304,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       id: generateId(),
       progress: 0,
       createdAt: Date.now(),
+      status: 'pending',
     };
+
     set((state) => ({ tasks: [...state.tasks, newTask] }));
   },
 
@@ -302,39 +316,18 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     }));
   },
 
-  assignTask: async (taskId, agentId) => {
-    const { agents, addMessage, executeTask } = get();
-    
-    // First assign the task
+  assignTask: (taskId, agentId) => {
     set((state) => ({
       tasks: state.tasks.map((t) =>
-        t.id === taskId ? { ...t, assignedTo: agentId, status: 'in_progress' } : t
-      ),
-      agents: state.agents.map((a) =>
-        a.id === agentId ? { ...a, status: 'busy' } : a
+        t.id === taskId ? { ...t, assignedTo: agentId } : t
       ),
     }));
-
-    // Get agent info
-    const agent = agents.find(a => a.id === agentId);
-    const task = get().tasks.find(t => t.id === taskId);
-    
-    if (agent && task) {
-      // Notify agent is starting work
-      addMessage(agentId, {
-        sender: 'agent',
-        content: `🎯 Starting task: "${task.title}"\n\n${task.description.slice(0, 100)}...`
-      });
-
-      // Execute the task automatically using Bedrock AI
-      await executeTask(taskId);
-    }
   },
 
-  completeTask: (id) => {
+  completeTask: (id, result?: string) => {
     set((state) => ({
       tasks: state.tasks.map((t) =>
-        t.id === id ? { ...t, status: 'completed', progress: 100, completedAt: Date.now() } : t
+        t.id === id ? { ...t, status: 'completed', progress: 100, completedAt: Date.now(), ...(result ? { result } : {}) } : t
       ),
     }));
   },
@@ -344,7 +337,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   executeTask: async (taskId) => {
-    const { tasks, agents, addMessage, updateTask, completeTask } = get();
+    const { tasks, agents, addMessage, updateTask, completeTask, addActivityLog, updateAgent } = get();
     const task = tasks.find((t) => t.id === taskId);
     if (!task || !task.assignedTo) {
       return { success: false, output: '', error: 'Task not found or not assigned' };
@@ -356,39 +349,101 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     }
 
     // Update task status to in_progress
-    updateTask(taskId, { status: 'in_progress' });
-    
+    updateTask(taskId, { status: 'in_progress', progress: 5 });
+    updateAgent(agent.id, { status: 'busy', targetPosition: undefined });
+
     // Add message that agent is working
-    addMessage(agent.id, { 
-      sender: 'agent', 
-      content: `Starting task: "${task.title}"...` 
+    addMessage(agent.id, {
+      sender: 'agent',
+      content: `Starting task: "${task.title}"...`
     });
 
-    // Simulate progress while working
-    const progressInterval = setInterval(() => {
-      const currentTask = get().tasks.find(t => t.id === taskId);
-      if (currentTask && currentTask.progress < 90) {
-        updateTask(taskId, { progress: currentTask.progress + 10 });
-      }
-    }, 1000);
-
     try {
-      // Execute the actual task using Bedrock AI
-      const result = await taskExecutor.executeTask(task, agent);
+      // Track tool steps for progress
+      let stepCount = 0;
+      const collectedSteps: ToolStep[] = [];
 
-      clearInterval(progressInterval);
+      const getIcon = (action: string) => {
+        const lower = action.toLowerCase();
+        if (lower.includes('exa') || lower.includes('search')) return '🔍';
+        if (lower.includes('notion') || lower.includes('sav')) return '📝';
+        if (lower.includes('slack') || lower.includes('notif')) return '💬';
+        return '🔧';
+      };
+
+      // Execute with streaming callbacks — tool steps appear in chat in real-time
+      const result = await taskExecutor.executeTask(task, agent, {
+        onToolCall: (step) => {
+          stepCount++;
+          const icon = getIcon(step.action);
+          // Show tool call in agent chat immediately
+          addMessage(agent.id, {
+            sender: 'agent',
+            content: `${icon} ${step.action}...`,
+            type: 'tool_step',
+            toolStep: { ...step, status: 'success' },
+          } as Omit<Message, 'id' | 'timestamp'>);
+
+          // Update progress — estimate based on steps seen so far
+          const progress = Math.min(5 + stepCount * 12, 85);
+          updateTask(taskId, { progress });
+        },
+        onToolResult: (step) => {
+          collectedSteps.push(step);
+          const icon = step.status === 'error' ? '❌' : '✅';
+          // Show tool result in agent chat
+          addMessage(agent.id, {
+            sender: 'agent',
+            content: `${icon} ${step.action}: ${step.summary.slice(0, 150)}`,
+            type: 'tool_step',
+            toolStep: step,
+          } as Omit<Message, 'id' | 'timestamp'>);
+
+          // Add to activity logs
+          addActivityLog({
+            timestamp: step.timestamp,
+            agentId: agent.id,
+            agentName: agent.name,
+            taskId,
+            toolStep: step,
+          });
+
+          const progress = Math.min(5 + collectedSteps.length * 15, 90);
+          updateTask(taskId, { progress });
+        },
+        onStatus: (message) => {
+          addMessage(agent.id, {
+            sender: 'agent',
+            content: message,
+          });
+        },
+      });
+
+      // Store toolSteps on the task
+      if (collectedSteps.length > 0) {
+        updateTask(taskId, { toolSteps: collectedSteps });
+      } else if (result.toolSteps && result.toolSteps.length > 0) {
+        updateTask(taskId, { toolSteps: result.toolSteps });
+      }
 
       if (result.success) {
-        completeTask(taskId);
-        // Reset agent status to available
+        completeTask(taskId, result.output || 'Task completed successfully!');
         set((state) => ({
           agents: state.agents.map((a) =>
             a.id === agent.id ? { ...a, status: 'available' } : a
           ),
         }));
-        addMessage(agent.id, { 
-          sender: 'agent', 
-          content: `✅ Completed: "${task.title}"\n\n${result.output?.slice(0, 300) || 'Task completed successfully!'}...` 
+        addMessage(agent.id, {
+          sender: 'agent',
+          content: `✅ Completed: "${task.title}"\n\n${result.output?.slice(0, 300) || 'Task completed successfully!'}`
+        });
+
+        // Send Slack notification
+        await notifySlackTaskCompletion({
+          taskTitle: task.title,
+          agentName: agent.name,
+          status: 'completed',
+          output: result.output,
         });
       } else {
         updateTask(taskId, { status: 'pending' });
@@ -397,15 +452,22 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
             a.id === agent.id ? { ...a, status: 'available' } : a
           ),
         }));
-        addMessage(agent.id, { 
-          sender: 'agent', 
-          content: `❌ Failed to complete: "${task.title}"\nError: ${result.error}` 
+        addMessage(agent.id, {
+          sender: 'agent',
+          content: `❌ Failed to complete: "${task.title}"\nError: ${result.error}`
+        });
+
+        // Send Slack notification for failure
+        await notifySlackTaskCompletion({
+          taskTitle: task.title,
+          agentName: agent.name,
+          status: 'failed',
+          error: result.error,
         });
       }
 
       return result;
     } catch (error) {
-      clearInterval(progressInterval);
       updateTask(taskId, { status: 'pending' });
       set((state) => ({
         agents: state.agents.map((a) =>
@@ -413,9 +475,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         ),
       }));
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      addMessage(agent.id, { 
-        sender: 'agent', 
-        content: `❌ Error executing task: ${errorMessage}` 
+      addMessage(agent.id, {
+        sender: 'agent',
+        content: `❌ Error executing task: ${errorMessage}`
       });
       return { success: false, output: '', error: errorMessage };
     }
@@ -467,6 +529,16 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   toggleAllHandsMode: () => {
     set((state) => ({
       office: { ...state.office, allHandsMode: !state.office.allHandsMode },
+    }));
+  },
+
+  addActivityLog: (entry) => {
+    const newEntry: ActivityLogEntry = {
+      ...entry,
+      id: generateId(),
+    };
+    set((state) => ({
+      activityLogs: [...state.activityLogs.slice(-49), newEntry],
     }));
   },
 
